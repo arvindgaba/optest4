@@ -1,1 +1,10 @@
 streamlit
+streamlit-autorefresh
+plotly
+pandas
+requests
+urllib3
+certifi
+cloudscraper
+websocket-client
+git+https://github.com/rongardF/tvdatafeed.git
