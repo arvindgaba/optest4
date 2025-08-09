@@ -4,6 +4,19 @@
 
 ---
 
+## Version 0.8
+**Date Created:** 09 August 2025  
+**Date Updated:** 09 August 2025  
+**Changes:**
+- ✅ Added support for multiple Telegram chat IDs
+- ✅ Added additional chat ID (5045651468) alongside existing one (1887957750)
+- ✅ Enhanced send_telegram_alert function to send to multiple recipients
+- ✅ Test alerts now also sent to both chat IDs
+- ✅ Improved error handling and logging for multiple chat delivery
+- ✅ Success tracking shows delivery status for each chat ID
+
+---
+
 ## Version 0.7
 **Date Created:** 09 August 2025  
 **Date Updated:** 09 August 2025  
@@ -159,7 +172,7 @@
 
 For technical support or feature requests, please refer to the application logs or contact the development team.
 
-**Application Version**: v0.5  
+**Application Version**: v0.8  
 **Last Updated**: 09 August 2025  
 **Compatibility**: Python 3.8+, Streamlit 1.48+
 

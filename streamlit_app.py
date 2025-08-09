@@ -42,7 +42,7 @@ TV_PASSWORD          = "1dE6Land@123"
 
 # ---- TELEGRAM SETTINGS ----
 TELEGRAM_BOT_TOKEN   = "1849589360:AAFW_O3pxt6NZJvoV-NeUMfqu90wIyP8bSA"
-TELEGRAM_CHAT_ID     = "1887957750"
+TELEGRAM_CHAT_IDS    = ["1887957750", "5045651468"]  # Multiple chat IDs for alerts
 TELEGRAM_API_URL     = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 # ===========================
 
@@ -96,22 +96,32 @@ log = setup_logger()
 
 # ---------------- Telegram Alert Function ----------------
 def send_telegram_alert(message: str) -> bool:
-    """Send alert message to Telegram. Returns True if successful."""
-    try:
-        payload = {
-            'chat_id': TELEGRAM_CHAT_ID,
-            'text': message,
-            'parse_mode': 'HTML'
-        }
-        response = requests.post(TELEGRAM_API_URL, data=payload, timeout=10)
-        if response.status_code == 200:
-            log.info("Telegram alert sent successfully")
-            return True
-        else:
-            log.error("Telegram alert failed: HTTP %s - %s", response.status_code, response.text)
-            return False
-    except Exception as e:
-        log.error("Telegram alert exception: %s", e)
+    """Send alert message to multiple Telegram chat IDs. Returns True if at least one succeeds."""
+    success_count = 0
+    total_chats = len(TELEGRAM_CHAT_IDS)
+    
+    for chat_id in TELEGRAM_CHAT_IDS:
+        try:
+            payload = {
+                'chat_id': chat_id,
+                'text': message,
+                'parse_mode': 'HTML'
+            }
+            response = requests.post(TELEGRAM_API_URL, data=payload, timeout=10)
+            if response.status_code == 200:
+                log.info("Telegram alert sent successfully to chat_id: %s", chat_id)
+                success_count += 1
+            else:
+                log.error("Telegram alert failed for chat_id %s: HTTP %s - %s", 
+                         chat_id, response.status_code, response.text)
+        except Exception as e:
+            log.error("Telegram alert exception for chat_id %s: %s", chat_id, e)
+    
+    if success_count > 0:
+        log.info("Telegram alert sent to %d/%d chat IDs successfully", success_count, total_chats)
+        return True
+    else:
+        log.error("Telegram alert failed for all %d chat IDs", total_chats)
         return False
 
 def format_vwap_alert_message(alert: str, spot: float, vwap: float, suggestion: str, 
