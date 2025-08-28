@@ -21,7 +21,7 @@ import requests, urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= USER SETTINGS =================
-APP_VERSION = "2.1"
+APP_VERSION = "2.1.1" # Incremented version to invalidate cache
 SYMBOL               = "NIFTY"
 FETCH_EVERY_SECONDS  = 60          # option-chain poll (1 min)
 TV_FETCH_SECONDS     = 60           # TradingView poll (1 min)
@@ -718,7 +718,8 @@ def tradingview_loop(mem: StoreMem):
         time.sleep(TV_FETCH_SECONDS)
 
 @st.cache_resource
-def start_background() -> StoreMem:
+def start_background(app_version: str) -> StoreMem:
+    log.info(f"Starting background threads for app version {app_version}")
     mem = StoreMem()
     threading.Thread(target=option_chain_loop, args=(mem,), daemon=True, name="OC-Loop").start()
     threading.Thread(target=tradingview_loop, args=(mem,), daemon=True, name="TV-Loop").start()
@@ -734,7 +735,7 @@ def play_beep_once_on_new_alert(mem: StoreMem, alert_text: str):
 # ---------------- Streamlit UI ----------------
 st.set_page_config(page_title=f"NFS LIVE v{APP_VERSION}", layout="wide")
 st_autorefresh(interval=AUTOREFRESH_MS, key="nifty_autorefresh")
-mem = start_background()
+mem = start_background(APP_VERSION)
 
 with st.sidebar:
     st.header("Settings")
