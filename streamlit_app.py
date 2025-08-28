@@ -9,6 +9,7 @@
 # - Full logging + CSV/text outputs
 # - ENHANCED: Multi-factor scoring (OI, Volume, IV), Dynamic Thresholds, RSI/ADX indicators
 # - INTEGRATED: Telegram alerts, Signal History, Dual Timezone UI
+# - ZERODHA INTEGRATION: Fetch live option price on signal trigger
 
 import os, json, time, base64, datetime as dt, pathlib, threading, warnings, logging, sys, math, random
 import pandas as pd
@@ -19,10 +20,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 import certifi
 import requests, urllib3
+from kiteconnect import KiteConnect
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= USER SETTINGS =================
-APP_VERSION = "2.1.7" # Final UI Enhancements
+APP_VERSION = "2.2.0" # Zerodha API Integration
 SYMBOL               = "NIFTY"
 FETCH_EVERY_SECONDS  = 60          # option-chain poll (1 min)
 TV_FETCH_SECONDS     = 60           # TradingView poll (1 min)
@@ -32,14 +35,15 @@ OUT_DIR              = pathlib.Path.home() / "Documents" / "NSE_output"
 CSV_PATH             = OUT_DIR / "nifty_currweek_change_oi_atm_dynamic.csv"
 ATM_STORE_PATH       = OUT_DIR / "nifty_atm_store.json"
 LOG_PATH             = OUT_DIR / "nifty_app.log"
-VWAP_NOW_TXT         = OUT_DIR / "nifty_vwap_now.txt"
-VWAP_LOG_CSV         = OUT_DIR / "nifty_vwap_log.csv"
+ACCESS_TOKEN_PATH    = OUT_DIR / "zerodha_access_token.txt"
+
 
 MAX_NEIGHBORS_LIMIT  = 20
 IMBALANCE_TRIGGER    = 30.0         # % - This will be adjusted dynamically
 VWAP_TOLERANCE_PTS   = 10.0          # alert when |spot - vwap| <= tolerance
 RSI_PERIOD           = 14
 ADX_PERIOD           = 14
+NIFTY_LOT_SIZE       = 50
 
 # ---- HARD-CODED TradingView credentials (REPLACE THESE) ----
 TV_USERNAME          = "dileep.marchetty@gmail.com"
@@ -122,17 +126,25 @@ def send_telegram_alert(message: str) -> bool:
 
 def format_vwap_alert_message(alert: str, spot: float, vwap: float, suggestion: str,
                              atm_strike: int, expiry: str, final_score: float,
-                             rsi: float, adx: float, timestamp: str) -> str:
+                             rsi: float, adx: float, timestamp: str, option_price: float = None) -> str:
     """Format a comprehensive VWAP alert message for Telegram."""
     emoji = "🚨" if "BUY" in suggestion else "📊"
     direction_emoji = "📈" if "CALL" in suggestion else "📉" if "PUT" in suggestion else "⚪"
     
+    price_info = ""
+    if option_price is not None:
+        lot_value = option_price * NIFTY_LOT_SIZE
+        price_info = f"""
+✅ <b>Option Price (LTP):</b> ₹{option_price:,.2f}
+📦 <b>Lot Value:</b> ₹{lot_value:,.2f}
+"""
+
     message = f"""
 {emoji} <b>NFS LIVE v{APP_VERSION} - VWAP ALERT</b> {emoji}
 
 {direction_emoji} <b>Signal:</b> {suggestion}
 📍 <b>Alert:</b> {alert}
-
+{price_info}
 💰 <b>Market Data:</b>
 • Spot Price: ₹{spot:,.2f}
 • VWAP (15m): ₹{vwap:,.2f}
@@ -615,6 +627,7 @@ class StoreMem:
         self.last_telegram_alert: str = ""
         self.intraday = IntradayImbalanceSeries()
         self.signal_history = SignalHistory()
+        self.kite: KiteConnect | None = None
 
 # ---------------- Worker Loops ----------------
 def option_chain_loop(mem: StoreMem):
@@ -640,6 +653,28 @@ def option_chain_loop(mem: StoreMem):
         except Exception as e:
             log.exception("OptionChain loop error: %s", e)
         time.sleep(FETCH_EVERY_SECONDS)
+
+def get_option_ltp(kite: KiteConnect, atm_strike: int, expiry: str, option_type: str) -> float | None:
+    """Constructs the trading symbol and fetches the LTP from Zerodha."""
+    if not kite: return None
+    try:
+        # Format expiry to Zerodha's required format: YYMMMDD -> 25AUG28
+        expiry_dt = dt.datetime.strptime(expiry, "%d-%b-%Y")
+        expiry_zerodha = expiry_dt.strftime("%y%b%d").upper()
+        
+        instrument = f"NIFTY{expiry_zerodha}{atm_strike}{option_type}"
+        trading_symbol = f"NFO:{instrument}"
+        
+        quote = kite.ltp(trading_symbol)
+        if quote and trading_symbol in quote:
+            ltp = quote[trading_symbol]['last_price']
+            log.info(f"Fetched LTP for {trading_symbol}: {ltp}")
+            return ltp
+        log.warning(f"LTP not found for {trading_symbol}")
+        return None
+    except Exception as e:
+        log.error(f"Error fetching LTP: {e}")
+        return None
 
 def tradingview_loop(mem: StoreMem):
     while True:
@@ -687,29 +722,37 @@ def tradingview_loop(mem: StoreMem):
             
             if alert != "NO ALERT" and alert != mem.last_telegram_alert:
                 try:
+                    option_price = None
+                    with mem.lock:
+                        if mem.kite:
+                            option_type = "CE" if "CALL" in sugg else "PE"
+                            option_price = get_option_ltp(mem.kite, meta.get("atm"), meta.get("expiry"), option_type)
+
                     timestamp = now_ist().strftime("%Y-%m-%d %H:%M:%S")
                     telegram_message = format_vwap_alert_message(
                         alert=alert, spot=float(spot), vwap=float(vwap_latest), suggestion=sugg,
                         atm_strike=int(meta.get("atm", 0)), expiry=meta.get("expiry", "N/A"),
                         final_score=float(meta.get("final_score", 0.0)), rsi=float(rsi), adx=float(adx),
-                        timestamp=timestamp
+                        timestamp=timestamp, option_price=option_price
                     )
                     telegram_success = send_telegram_alert(telegram_message)
                     if telegram_success:
                         with mem.lock: mem.last_telegram_alert = alert
+                    
                     mem.signal_history.add_signal(
                         alert=alert, suggestion=sugg, spot_price=round(float(spot), 2),
                         vwap=round(float(vwap_latest), 2), difference=round(abs(float(spot) - float(vwap_latest)), 2),
                         atm_strike=int(meta.get("atm", 0)), expiry=meta.get("expiry", "N/A"),
                         final_score=round(float(meta.get("final_score", 0.0)) * 100, 2),
                         rsi=round(float(rsi), 2), adx=round(float(adx), 2),
-                        telegram_sent=telegram_success
+                        telegram_sent=telegram_success,
+                        option_price=option_price,
+                        lot_value=option_price * NIFTY_LOT_SIZE if option_price else None
                     )
                 except Exception as e:
                     log.error("Error preparing/sending Telegram alert: %s", e)
 
             stamp = now_ist().strftime("%Y-%m-%d %H:%M:%S")
-            #write_vwap_files(stamp, vwap_latest, spot, sugg)
             log.info("[TV] vwap=%s alert=%s", f"{vwap_latest:.2f}" if vwap_latest is not None else "None", alert)
         except Exception as e:
             with mem.lock: mem.last_tv, mem.vwap_latest = now_ist(), None
@@ -774,7 +817,46 @@ st.set_page_config(page_title=f"NFS LIVE v{APP_VERSION}", layout="wide")
 st_autorefresh(interval=AUTOREFRESH_MS, key="nifty_autorefresh")
 mem = start_background(APP_VERSION)
 
+# --- ZERODHA AUTHENTICATION ---
 with st.sidebar:
+    st.header("Zerodha Connection")
+    try:
+        api_key = st.secrets["zerodha"]["api_key"]
+        api_secret = st.secrets["zerodha"]["api_secret"]
+        kite = KiteConnect(api_key=api_key)
+
+        if ACCESS_TOKEN_PATH.exists():
+            access_token = ACCESS_TOKEN_PATH.read_text()
+            try:
+                kite.set_access_token(access_token)
+                profile = kite.profile()
+                st.success(f"Connected as {profile['user_name']}")
+                with mem.lock:
+                    mem.kite = kite
+            except Exception as e:
+                st.warning("Access token expired or invalid. Please re-login.")
+                ACCESS_TOKEN_PATH.unlink() # Delete expired token
+        else:
+            st.info("Please login to Zerodha to fetch live prices.")
+            login_url = kite.login_url()
+            st.markdown(f"[Click here to generate request token]({login_url})", unsafe_allow_html=True)
+            
+            request_token = st.text_input("Paste Request Token here")
+            if st.button("Generate Access Token"):
+                try:
+                    data = kite.generate_session(request_token, api_secret=api_secret)
+                    access_token = data["access_token"]
+                    ACCESS_TOKEN_PATH.write_text(access_token)
+                    st.success("Access token generated successfully! Refreshing...")
+                    time.sleep(2)
+                    st.experimental_rerun()
+                except Exception as e:
+                    st.error(f"Authentication failed: {e}")
+
+    except Exception as e:
+        st.error("Zerodha API credentials not found in secrets.toml")
+        log.error(f"Zerodha secrets error: {e}")
+
     st.header("Settings")
     VWAP_tol = st.number_input("VWAP tolerance (pts)", value=float(VWAP_TOLERANCE_PTS), step=1.0)
     IMB_thr  = st.number_input("Imbalance trigger (%)", value=float(IMBALANCE_TRIGGER), step=1.0)
@@ -910,7 +992,8 @@ else:
     display_cols = {
         'id': 'ID', 'timestamp_ist': 'Time (IST)', 'suggestion': 'Signal', 
         'spot_price': 'Spot', 'vwap': 'VWAP', 'final_score': 'Score %', 
-        'rsi': 'RSI', 'adx': 'ADX', 'telegram_sent': 'Sent'
+        'rsi': 'RSI', 'adx': 'ADX', 'telegram_sent': 'Sent',
+        'option_price': 'Option Price', 'lot_value': 'Lot Value'
     }
     display_df = signal_df[list(display_cols.keys())].copy()
     display_df.rename(columns=display_cols, inplace=True)
