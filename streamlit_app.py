@@ -22,7 +22,7 @@ import requests, urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= USER SETTINGS =================
-APP_VERSION = "2.1.4" # Added Signal Strength Gauge
+APP_VERSION = "2.1.5" # Restored UI elements and fixed gauge
 SYMBOL               = "NIFTY"
 FETCH_EVERY_SECONDS  = 60          # option-chain poll (1 min)
 TV_FETCH_SECONDS     = 60           # TradingView poll (1 min)
@@ -742,16 +742,16 @@ def create_signal_gauge(score: float, trigger: float) -> go.Figure:
     fig = go.Figure(go.Indicator(
         mode = "gauge+number",
         value = score,
-        title = {'text': "Signal Strength"},
+        title = {'text': "Signal Strength", 'font': {'size': 20}},
         domain = {'x': [0, 1], 'y': [0, 1]},
         gauge = {
             'axis': {'range': [-100, 100]},
             'bar': {'color': "rgba(0,0,0,0.3)"},
             'steps' : [
-                {'range': [-100, -trigger], 'color': "rgba(255, 0, 0, 0.7)"},
-                {'range': [trigger, 100], 'color': "rgba(0, 204, 0, 0.7)"}],
-            'threshold' : {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': trigger}}))
-    fig.update_layout(height=250, margin=dict(l=20, r=20, t=40, b=20))
+                {'range': [-100, -trigger], 'color': "rgba(255, 75, 75, 0.7)"},
+                {'range': [trigger, 100], 'color': "rgba(75, 255, 75, 0.7)"}],
+            'threshold' : {'line': {'color': "black", 'width': 3}, 'thickness': 1, 'value': trigger}}))
+    fig.update_layout(height=250, margin=dict(l=30, r=30, t=50, b=30))
     return fig
 
 # ---------------- Streamlit UI ----------------
@@ -779,6 +779,16 @@ with st.sidebar:
         )
         if send_telegram_alert(test_msg): st.success("✅ Test alert sent!")
         else: st.error("❌ Failed to send test alert.")
+    
+    st.divider()
+    with st.expander("📝 View Changelog"):
+        try:
+            # This assumes a changelog.md file exists in the same directory
+            changelog_content = pathlib.Path("changelog.md").read_text(encoding="utf-8")
+            st.markdown(changelog_content, unsafe_allow_html=True)
+        except Exception as e:
+            st.error(f"Could not load changelog.md: {e}")
+
 
 with mem.lock:
     df_live, meta, last_opt, vwap_latest, last_tv, vwap_alert, rsi, adx = \
@@ -845,7 +855,9 @@ with k1:
 with k2:
     st.metric("Dynamic Trigger", f"{dynamic_trigger:,.2f}%")
 with k3:
-    st.plotly_chart(create_signal_gauge(final_score * 100, dynamic_trigger), use_container_width=True)
+    # Clamp score for display in gauge to handle off-market anomalies
+    display_score = np.clip(final_score * 100, -100, 100)
+    st.plotly_chart(create_signal_gauge(display_score, dynamic_trigger), use_container_width=True)
 
 
 # VWAP vs Spot Difference Caption
