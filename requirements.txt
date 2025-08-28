@@ -2,9 +2,11 @@ streamlit
 streamlit-autorefresh
 plotly
 pandas
+numpy
 requests
 urllib3
 certifi
 cloudscraper
 websocket-client
-git+https://github.com/rongardF/tvdatafeed.git
+kiteconnect
+tvdatafeed
