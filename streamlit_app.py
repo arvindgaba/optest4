@@ -22,7 +22,7 @@ import requests, urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= USER SETTINGS =================
-APP_VERSION = "2.1.5" # Restored UI elements and fixed gauge
+APP_VERSION = "2.1.6" # Added VWAP Gauge and restored UI elements
 SYMBOL               = "NIFTY"
 FETCH_EVERY_SECONDS  = 60          # option-chain poll (1 min)
 TV_FETCH_SECONDS     = 60           # TradingView poll (1 min)
@@ -163,7 +163,9 @@ def format_time_compact(dt_ist: dt.datetime) -> str:
     """Format time for Streamlit metrics - IST only to avoid truncation."""
     if dt_ist is None:
         return "—"
-    return dt_ist.strftime("%H:%M:%S IST")
+    dt_uae = dt_ist.astimezone(UAE)
+    return f"{dt_ist.strftime('%H:%M:%S')} IST / {dt_uae.strftime('%H:%M:%S')} UAE"
+
 
 def format_datetime_compact(dt_ist: dt.datetime) -> str:
     """Format datetime compactly for Streamlit display - single line format."""
@@ -754,6 +756,27 @@ def create_signal_gauge(score: float, trigger: float) -> go.Figure:
     fig.update_layout(height=250, margin=dict(l=30, r=30, t=50, b=30))
     return fig
 
+def create_vwap_gauge(diff: float, tolerance: float) -> go.Figure:
+    """Creates a horizontal bullet gauge for the VWAP difference."""
+    fig = go.Figure(go.Indicator(
+        mode = "gauge+number",
+        value = diff,
+        title = {'text': "VWAP Difference", 'font': {'size': 16}},
+        domain = {'x': [0, 1], 'y': [0, 1]},
+        gauge = {
+            'shape': "bullet",
+            'axis' : {'range': [-100, 100]},
+            'threshold' : {
+                'line': {'color': "black", 'width': 2},
+                'thickness': 0.75,
+                'value': diff},
+            'steps' : [
+                {'range': [-tolerance, tolerance], 'color': "rgba(75, 255, 75, 0.7)"},
+            ],
+            'bar': {'color': 'rgba(0,0,0,0.3)'}}))
+    fig.update_layout(height=100, margin=dict(l=30, r=30, t=40, b=20))
+    return fig
+
 # ---------------- Streamlit UI ----------------
 st.set_page_config(page_title=f"NFS LIVE v{APP_VERSION}", layout="wide")
 st_autorefresh(interval=AUTOREFRESH_MS, key="nifty_autorefresh")
@@ -849,20 +872,20 @@ st.caption(
 )
 
 # Key Metrics & Signal Gauge
-k1, k2, k3 = st.columns([1,1,2])
+k1, k2 = st.columns(2)
 with k1:
     st.metric("Final Score", f"{final_score*100:,.2f}%")
-with k2:
     st.metric("Dynamic Trigger", f"{dynamic_trigger:,.2f}%")
-with k3:
+with k2:
     # Clamp score for display in gauge to handle off-market anomalies
     display_score = np.clip(final_score * 100, -100, 100)
     st.plotly_chart(create_signal_gauge(display_score, dynamic_trigger), use_container_width=True)
 
 
-# VWAP vs Spot Difference Caption
+# VWAP vs Spot Difference Gauge
 if vwap_latest is not None and spot is not None:
-    st.caption(f"VWAP: **{vwap_latest:,.2f}** •  Spot: **{spot:,.2f}** •  Diff: **{spot - vwap_latest:+.2f}**")
+    vwap_diff = spot - vwap_latest
+    st.plotly_chart(create_vwap_gauge(vwap_diff, VWAP_tol), use_container_width=True)
 else:
     st.caption("VWAP or Spot not available yet.")
 
