@@ -9,4 +9,4 @@ certifi
 cloudscraper
 websocket-client
 kiteconnect
-tvdatafeed
+git+https://github.com/rongardF/tvdatafeed.git
