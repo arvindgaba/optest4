@@ -21,7 +21,7 @@ import requests, urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= USER SETTINGS =================
-APP_VERSION = "2.1.1" # Incremented version to invalidate cache
+APP_VERSION = "2.1.2" # Incremented version to invalidate cache and add UI updates
 SYMBOL               = "NIFTY"
 FETCH_EVERY_SECONDS  = 60          # option-chain poll (1 min)
 TV_FETCH_SECONDS     = 60           # TradingView poll (1 min)
@@ -777,11 +777,19 @@ if df_live is None or df_live.empty:
     st.warning("Waiting for first successful option-chain fetch…")
     st.stop()
 
+# Extract data from meta dictionary for UI
 final_score = meta.get("final_score", 0.0)
 suggestion = meta.get("suggestion", "NO SIGNAL")
 spot = meta.get("underlying")
 dynamic_trigger = meta.get("dynamic_trigger", IMBALANCE_TRIGGER)
+expiry = meta.get("expiry", "N/A")
+updated_str = meta.get("updated", "")
+atm_strike = meta.get("atm", 0)
+atm_status = meta.get("atm_status", "unknown")
+base_value = meta.get("base_value")
+neighbors_each = meta.get("neighbors_each", 0)
 
+# Alert Logic
 imbalance_ok = abs(final_score * 100) > IMB_thr
 vwap_ok = (vwap_latest is not None and spot is not None and abs(float(spot) - float(vwap_latest)) <= VWAP_tol)
 combined_alert = "NO ALERT"
@@ -794,14 +802,48 @@ if combined_alert != "NO ALERT":
 else:
     st.info("No active alert. Waiting for conditions to align.", icon="ℹ️")
 
+# Detailed Context Caption
+try:
+    updated_dt = dt.datetime.strptime(updated_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST)
+    updated_display = format_datetime_compact(updated_dt)
+except (ValueError, TypeError):
+    updated_display = f"{updated_str} IST"
+base_disp = f"{base_value:,.2f}" if isinstance(base_value, (int, float)) else "—"
+
+st.subheader(f"Expiry: {expiry}")
+st.caption(
+    f"Updated: **{updated_display}** • ATM: **{atm_strike}** (**{atm_status}**, base={base_disp}) • "
+    f"Neighbors each side: **{neighbors_each}**"
+)
+
+# Key Metrics
 k1, k2, k3, k4 = st.columns(4)
 k1.metric("PUT Σ Chg OI", f"{meta.get('oi_put_sum', 0):,.0f}")
 k2.metric("CALL Σ Chg OI", f"{meta.get('oi_call_sum', 0):,.0f}")
 k3.metric("Final Score", f"{final_score*100:,.2f}%")
 k4.metric("Dynamic Trigger", f"{dynamic_trigger:,.2f}%")
 
+# VWAP vs Spot Difference Caption
+if vwap_latest is not None and spot is not None:
+    st.caption(f"VWAP: **{vwap_latest:,.2f}** •  Spot: **{spot:,.2f}** •  Diff: **{spot - vwap_latest:+.2f}**")
+else:
+    st.caption("VWAP or Spot not available yet.")
+
+# Main Data Table
 st.dataframe(df_live, use_container_width=True, hide_index=True)
 
+# OI Bar Chart
+plot_df_oi = df_live.melt(id_vars=["Strike"],
+                       value_vars=["Call Chg OI", "Put Chg OI"],
+                       var_name="Side", value_name="Chg OI").sort_values("Strike")
+title_oi = f"ΔOI by Strike (ATM {atm_strike}, ±{neighbors_each})"
+fig_oi = px.bar(plot_df_oi, x="Strike", y="Chg OI", color="Side", barmode="group", text="Chg OI", title=title_oi)
+fig_oi.update_traces(texttemplate="%{text:,}", textposition="outside", cliponaxis=False)
+fig_oi.update_layout(xaxis=dict(type="category"), margin=dict(t=80, r=20, l=20, b=40))
+st.plotly_chart(fig_oi, use_container_width=True)
+
+
+# Intraday Score Trend Chart
 df_trend = mem.intraday.to_dataframe()
 if not df_trend.empty:
     df_trend = df_trend.between_time("09:15", "16:00")
@@ -810,6 +852,7 @@ if not df_trend.empty:
         fig_trend = px.line(df_plot, x="Time", y="Final Score %", title="Intraday Final Score Trend", markers=True)
         st.plotly_chart(fig_trend, use_container_width=True)
 
+# Signal History Table
 st.subheader("📊 Buy Signal History (Today)")
 signal_df = mem.signal_history.to_dataframe()
 if signal_df.empty:
