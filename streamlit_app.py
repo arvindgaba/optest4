@@ -25,7 +25,7 @@ from kiteconnect import KiteConnect
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= USER SETTINGS =================
-APP_VERSION = "2.2.0" # Zerodha API Integration
+APP_VERSION = "2.2.1" # Added Manual LTP Test Button
 SYMBOL               = "NIFTY"
 FETCH_EVERY_SECONDS  = 60          # option-chain poll (1 min)
 TV_FETCH_SECONDS     = 60           # TradingView poll (1 min)
@@ -817,7 +817,23 @@ st.set_page_config(page_title=f"NFS LIVE v{APP_VERSION}", layout="wide")
 st_autorefresh(interval=AUTOREFRESH_MS, key="nifty_autorefresh")
 mem = start_background(APP_VERSION)
 
-# --- ZERODHA AUTHENTICATION ---
+with mem.lock:
+    df_live, meta, last_opt, vwap_latest, last_tv, vwap_alert, rsi, adx = \
+        mem.df_opt, mem.meta_opt, mem.last_opt, mem.vwap_latest, mem.last_tv, mem.vwap_alert, mem.rsi, mem.adx
+
+# Extract data from meta dictionary for UI
+final_score = meta.get("final_score", 0.0)
+suggestion = meta.get("suggestion", "NO SIGNAL")
+spot = meta.get("underlying")
+dynamic_trigger = meta.get("dynamic_trigger", IMBALANCE_TRIGGER)
+expiry = meta.get("expiry", "N/A")
+updated_str = meta.get("updated", "")
+atm_strike = meta.get("atm", 0)
+atm_status = meta.get("atm_status", "unknown")
+base_value = meta.get("base_value")
+neighbors_each = meta.get("neighbors_each", 0)
+
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("Zerodha Connection")
     try:
@@ -835,7 +851,7 @@ with st.sidebar:
                     mem.kite = kite
             except Exception as e:
                 st.warning("Access token expired or invalid. Please re-login.")
-                ACCESS_TOKEN_PATH.unlink() # Delete expired token
+                if ACCESS_TOKEN_PATH.exists(): ACCESS_TOKEN_PATH.unlink()
         else:
             st.info("Please login to Zerodha to fetch live prices.")
             login_url = kite.login_url()
@@ -853,14 +869,33 @@ with st.sidebar:
                 except Exception as e:
                     st.error(f"Authentication failed: {e}")
 
-    except Exception as e:
+    except (KeyError, FileNotFoundError):
         st.error("Zerodha API credentials not found in secrets.toml")
-        log.error(f"Zerodha secrets error: {e}")
+        log.error("Zerodha secrets error")
 
+    st.divider()
     st.header("Settings")
     VWAP_tol = st.number_input("VWAP tolerance (pts)", value=float(VWAP_TOLERANCE_PTS), step=1.0)
     IMB_thr  = st.number_input("Imbalance trigger (%)", value=float(IMBALANCE_TRIGGER), step=1.0)
     st.caption(f"Logs: `{LOG_PATH}`")
+    st.divider()
+    st.subheader("Manual LTP Test")
+    test_strike = st.number_input("Strike Price", min_value=20000, max_value=30000, value=atm_strike, step=50)
+    test_type = st.selectbox("Option Type", ["CE", "PE"])
+    if st.button("Fetch Test LTP"):
+        with mem.lock:
+            kite_conn = mem.kite
+        
+        if kite_conn and expiry != "N/A":
+            st.write(f"Fetching LTP for NIFTY {test_strike} {test_type} (Expiry: {expiry})...")
+            ltp = get_option_ltp(kite_conn, test_strike, expiry, test_type)
+            if ltp is not None:
+                st.success(f"Last Traded Price: ₹{ltp:,.2f}")
+            else:
+                st.error("Failed to fetch LTP. Check logs or if the instrument is valid.")
+        else:
+            st.warning("Zerodha not connected or expiry not available.")
+
     st.divider()
     st.subheader("Telegram Alert Test")
     if st.button("Send Test Alert"):
@@ -877,33 +912,8 @@ with st.sidebar:
         if send_telegram_alert(test_msg): st.success("✅ Test alert sent!")
         else: st.error("❌ Failed to send test alert.")
     
-    st.divider()
-    with st.expander("📝 View Changelog"):
-        try:
-            # This assumes a changelog.md file exists in the same directory
-            changelog_content = pathlib.Path("changelog.md").read_text(encoding="utf-8")
-            st.markdown(changelog_content, unsafe_allow_html=True)
-        except Exception as e:
-            st.error(f"Could not load changelog.md: {e}")
-
-
-with mem.lock:
-    df_live, meta, last_opt, vwap_latest, last_tv, vwap_alert, rsi, adx = \
-        mem.df_opt, mem.meta_opt, mem.last_opt, mem.vwap_latest, mem.last_tv, mem.vwap_alert, mem.rsi, mem.adx
-
+# --- MAIN PAGE ---
 st.title(f"NFS LIVE v{APP_VERSION} - Multi-Factor NIFTY Analysis")
-
-# Extract data from meta dictionary for UI
-final_score = meta.get("final_score", 0.0)
-suggestion = meta.get("suggestion", "NO SIGNAL")
-spot = meta.get("underlying")
-dynamic_trigger = meta.get("dynamic_trigger", IMBALANCE_TRIGGER)
-expiry = meta.get("expiry", "N/A")
-updated_str = meta.get("updated", "")
-atm_strike = meta.get("atm", 0)
-atm_status = meta.get("atm_status", "unknown")
-base_value = meta.get("base_value")
-neighbors_each = meta.get("neighbors_each", 0)
 
 # Status row
 c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
