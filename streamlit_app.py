@@ -22,7 +22,7 @@ import requests, urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= USER SETTINGS =================
-APP_VERSION = "2.1.6" # Added VWAP Gauge and restored UI elements
+APP_VERSION = "2.1.7" # Final UI Enhancements
 SYMBOL               = "NIFTY"
 FETCH_EVERY_SECONDS  = 60          # option-chain poll (1 min)
 TV_FETCH_SECONDS     = 60           # TradingView poll (1 min)
@@ -158,14 +158,6 @@ def now_ist() -> dt.datetime:
 
 def now_uae() -> dt.datetime:
     return dt.datetime.now(UAE)
-
-def format_time_compact(dt_ist: dt.datetime) -> str:
-    """Format time for Streamlit metrics - IST only to avoid truncation."""
-    if dt_ist is None:
-        return "—"
-    dt_uae = dt_ist.astimezone(UAE)
-    return f"{dt_ist.strftime('%H:%M:%S')} IST / {dt_uae.strftime('%H:%M:%S')} UAE"
-
 
 def format_datetime_compact(dt_ist: dt.datetime) -> str:
     """Format datetime compactly for Streamlit display - single line format."""
@@ -819,19 +811,6 @@ with mem.lock:
 
 st.title(f"NFS LIVE v{APP_VERSION} - Multi-Factor NIFTY Analysis")
 
-# Status row
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Last OC", format_time_compact(last_opt) if last_opt else "—")
-c2.metric("Last TV", format_time_compact(last_tv) if last_tv else "—")
-c3.metric("Spot", f"{meta.get('underlying', 0):,.2f}")
-c4.metric("VWAP", f"{vwap_latest:,.2f}" if vwap_latest else "—")
-c5.metric("RSI", f"{rsi:,.2f}" if rsi else "—")
-c6.metric("ADX", f"{adx:,.2f}" if adx else "—")
-
-if df_live is None or df_live.empty:
-    st.warning("Waiting for first successful option-chain fetch…")
-    st.stop()
-
 # Extract data from meta dictionary for UI
 final_score = meta.get("final_score", 0.0)
 suggestion = meta.get("suggestion", "NO SIGNAL")
@@ -843,6 +822,25 @@ atm_strike = meta.get("atm", 0)
 atm_status = meta.get("atm_status", "unknown")
 base_value = meta.get("base_value")
 neighbors_each = meta.get("neighbors_each", 0)
+
+# Status row
+c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+with c1:
+    st.metric("Last OC", last_opt.strftime('%H:%M:%S') if last_opt else "—")
+    if last_opt: st.caption(f"{last_opt.astimezone(UAE).strftime('%H:%M:%S')} UAE")
+with c2:
+    st.metric("Last TV", last_tv.strftime('%H:%M:%S') if last_tv else "—")
+    if last_tv: st.caption(f"{last_tv.astimezone(UAE).strftime('%H:%M:%S')} UAE")
+c3.metric("Spot", f"{spot:,.2f}" if spot else "—")
+c4.metric("VWAP", f"{vwap_latest:,.2f}" if vwap_latest else "—")
+c5.metric("RSI", f"{rsi:,.2f}" if rsi else "—")
+c6.metric("ADX", f"{adx:,.2f}" if adx else "—")
+c7.metric("ATM Strike", f"{atm_strike}" if atm_strike else "—")
+
+
+if df_live is None or df_live.empty:
+    st.warning("Waiting for first successful option-chain fetch…")
+    st.stop()
 
 # Alert Logic
 imbalance_ok = abs(final_score * 100) > IMB_thr
@@ -886,6 +884,7 @@ with k2:
 if vwap_latest is not None and spot is not None:
     vwap_diff = spot - vwap_latest
     st.plotly_chart(create_vwap_gauge(vwap_diff, VWAP_tol), use_container_width=True)
+    st.caption(f"VWAP: **{vwap_latest:,.2f}** •  Spot: **{spot:,.2f}** •  Diff: **{vwap_diff:+.2f}**")
 else:
     st.caption("VWAP or Spot not available yet.")
 
