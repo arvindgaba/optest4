@@ -16,12 +16,13 @@ import numpy as np
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 import plotly.express as px
+import plotly.graph_objects as go
 import certifi
 import requests, urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= USER SETTINGS =================
-APP_VERSION = "2.1.2" # Incremented version to invalidate cache and add UI updates
+APP_VERSION = "2.1.4" # Added Signal Strength Gauge
 SYMBOL               = "NIFTY"
 FETCH_EVERY_SECONDS  = 60          # option-chain poll (1 min)
 TV_FETCH_SECONDS     = 60           # TradingView poll (1 min)
@@ -493,7 +494,7 @@ def build_df_with_imbalance(raw: dict, store: dict):
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.sort_values("Strike").reset_index(drop=True)
 
-    # Multi-factor scoring
+    # Multi-factor scoring & simple imbalance
     oi_call_sum = float(df["Call Chg OI"].sum(skipna=True))
     oi_put_sum  = float(df["Put Chg OI"].sum(skipna=True))
     vol_call_sum = float(df["Call Volume"].sum(skipna=True))
@@ -501,7 +502,10 @@ def build_df_with_imbalance(raw: dict, store: dict):
     iv_call_avg = float(df["Call IV"].mean(skipna=True))
     iv_put_avg  = float(df["Put IV"].mean(skipna=True))
 
-    oi_imbalance = (oi_put_sum - oi_call_sum) / (oi_put_sum + oi_call_sum) if (oi_put_sum + oi_call_sum) != 0 else 0
+    oi_denominator = oi_put_sum + oi_call_sum
+    imbalance_pct = ((oi_put_sum - oi_call_sum) / oi_denominator) * 100 if oi_denominator != 0 else 0
+
+    oi_imbalance = (oi_put_sum - oi_call_sum) / oi_denominator if oi_denominator != 0 else 0
     vol_imbalance = (vol_put_sum - vol_call_sum) / (vol_put_sum + vol_call_sum) if (vol_put_sum + vol_call_sum) != 0 else 0
     iv_imbalance = (iv_put_avg - iv_call_avg) / (iv_put_avg + iv_call_avg) if (iv_put_avg + iv_call_avg) != 0 else 0
     
@@ -531,7 +535,8 @@ def build_df_with_imbalance(raw: dict, store: dict):
         "final_score": final_score, "suggestion": suggestion, "expiry": expiry,
         "atm": atm_strike, "updated": updated_str, "atm_status": atm_status_disp,
         "base_value": base_value_disp, "dynamic_trigger": dynamic_trigger,
-        "oi_call_sum": oi_call_sum, "oi_put_sum": oi_put_sum
+        "oi_call_sum": oi_call_sum, "oi_put_sum": oi_put_sum,
+        "imbalance_pct": imbalance_pct # Add simple imbalance for graphing
     }
     log.info("Score: final=%.2f%% sugg=%s; ATM=%s (%s)", final_score * 100, suggestion, atm_strike, atm_status_disp)
     return df, meta
@@ -581,23 +586,23 @@ class SignalHistory:
         with self.lock:
             return pd.DataFrame(self.signals) if self.signals else pd.DataFrame()
 
-class IntradayImbSeries:
+class IntradayImbalanceSeries:
     def __init__(self, max_points: int = 480):
         self.lock = threading.Lock()
         self.points: list[tuple[dt.datetime, float]] = []
         self.max_points = max_points
-    def add_point(self, ts: dt.datetime, score: float):
+    def add_point(self, ts: dt.datetime, imbalance: float):
         if not (dt.time(9, 0) <= ts.time() <= dt.time(16, 0)): return
         today = now_ist().date()
         with self.lock:
             self.points = [(t, v) for t, v in self.points if t.date() == today]
-            self.points.append((ts, score))
+            self.points.append((ts, imbalance))
             if len(self.points) > self.max_points:
                 self.points = self.points[-self.max_points:]
     def to_dataframe(self) -> pd.DataFrame:
         with self.lock:
             if not self.points: return pd.DataFrame()
-            df = pd.DataFrame(self.points, columns=["ts", "final_score"])
+            df = pd.DataFrame(self.points, columns=["ts", "imbalance_pct"])
             df.set_index("ts", inplace=True)
             return df
 
@@ -614,7 +619,7 @@ class StoreMem:
         self.vwap_alert: str = "NO ALERT"
         self.last_alert_key: str = ""
         self.last_telegram_alert: str = ""
-        self.intraday = IntradayImbSeries()
+        self.intraday = IntradayImbalanceSeries()
         self.signal_history = SignalHistory()
 
 # ---------------- Worker Loops ----------------
@@ -626,9 +631,9 @@ def option_chain_loop(mem: StoreMem):
             if raw:
                 df, meta = build_df_with_imbalance(raw, {})
                 if not df.empty and meta:
-                    final_score = meta.get("final_score")
-                    if final_score is not None:
-                        mem.intraday.add_point(now_ist(), float(final_score * 100))
+                    imbalance_pct = meta.get("imbalance_pct")
+                    if imbalance_pct is not None:
+                        mem.intraday.add_point(now_ist(), float(imbalance_pct))
                     with mem.lock:
                         mem.df_opt, mem.meta_opt, mem.last_opt = df, dict(meta), now_ist()
                     try:
@@ -732,6 +737,23 @@ def play_beep_once_on_new_alert(mem: StoreMem, alert_text: str):
         st.markdown(f'<audio autoplay><source src="data:audio/wav;base64,{BEEP_WAV_B64}" type="audio/wav"></audio>', unsafe_allow_html=True)
         mem.last_alert_key = key
 
+def create_signal_gauge(score: float, trigger: float) -> go.Figure:
+    """Creates a gauge chart for the Final Score."""
+    fig = go.Figure(go.Indicator(
+        mode = "gauge+number",
+        value = score,
+        title = {'text': "Signal Strength"},
+        domain = {'x': [0, 1], 'y': [0, 1]},
+        gauge = {
+            'axis': {'range': [-100, 100]},
+            'bar': {'color': "rgba(0,0,0,0.3)"},
+            'steps' : [
+                {'range': [-100, -trigger], 'color': "rgba(255, 0, 0, 0.7)"},
+                {'range': [trigger, 100], 'color': "rgba(0, 204, 0, 0.7)"}],
+            'threshold' : {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': trigger}}))
+    fig.update_layout(height=250, margin=dict(l=20, r=20, t=40, b=20))
+    return fig
+
 # ---------------- Streamlit UI ----------------
 st.set_page_config(page_title=f"NFS LIVE v{APP_VERSION}", layout="wide")
 st_autorefresh(interval=AUTOREFRESH_MS, key="nifty_autorefresh")
@@ -816,12 +838,15 @@ st.caption(
     f"Neighbors each side: **{neighbors_each}**"
 )
 
-# Key Metrics
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("PUT Σ Chg OI", f"{meta.get('oi_put_sum', 0):,.0f}")
-k2.metric("CALL Σ Chg OI", f"{meta.get('oi_call_sum', 0):,.0f}")
-k3.metric("Final Score", f"{final_score*100:,.2f}%")
-k4.metric("Dynamic Trigger", f"{dynamic_trigger:,.2f}%")
+# Key Metrics & Signal Gauge
+k1, k2, k3 = st.columns([1,1,2])
+with k1:
+    st.metric("Final Score", f"{final_score*100:,.2f}%")
+with k2:
+    st.metric("Dynamic Trigger", f"{dynamic_trigger:,.2f}%")
+with k3:
+    st.plotly_chart(create_signal_gauge(final_score * 100, dynamic_trigger), use_container_width=True)
+
 
 # VWAP vs Spot Difference Caption
 if vwap_latest is not None and spot is not None:
@@ -832,24 +857,13 @@ else:
 # Main Data Table
 st.dataframe(df_live, use_container_width=True, hide_index=True)
 
-# OI Bar Chart
-plot_df_oi = df_live.melt(id_vars=["Strike"],
-                       value_vars=["Call Chg OI", "Put Chg OI"],
-                       var_name="Side", value_name="Chg OI").sort_values("Strike")
-title_oi = f"ΔOI by Strike (ATM {atm_strike}, ±{neighbors_each})"
-fig_oi = px.bar(plot_df_oi, x="Strike", y="Chg OI", color="Side", barmode="group", text="Chg OI", title=title_oi)
-fig_oi.update_traces(texttemplate="%{text:,}", textposition="outside", cliponaxis=False)
-fig_oi.update_layout(xaxis=dict(type="category"), margin=dict(t=80, r=20, l=20, b=40))
-st.plotly_chart(fig_oi, use_container_width=True)
-
-
-# Intraday Score Trend Chart
+# Intraday Imbalance Trend Chart
 df_trend = mem.intraday.to_dataframe()
 if not df_trend.empty:
     df_trend = df_trend.between_time("09:15", "16:00")
     if not df_trend.empty:
-        df_plot = df_trend.reset_index().rename(columns={"ts": "Time", "final_score": "Final Score %"})
-        fig_trend = px.line(df_plot, x="Time", y="Final Score %", title="Intraday Final Score Trend", markers=True)
+        df_plot = df_trend.reset_index().rename(columns={"ts": "Time", "imbalance_pct": "Imbalance %"})
+        fig_trend = px.line(df_plot, x="Time", y="Imbalance %", title="Intraday Imbalance % (live)", markers=True)
         st.plotly_chart(fig_trend, use_container_width=True)
 
 # Signal History Table
