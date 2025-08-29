@@ -25,7 +25,7 @@ from kiteconnect import KiteConnect
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= USER SETTINGS =================
-APP_VERSION = "2.2.4" # Card-based UI and Imbalance Metric
+APP_VERSION = "2.2.5" # Fixed Card UI Alignment
 SYMBOL               = "NIFTY"
 FETCH_EVERY_SECONDS  = 60          # option-chain poll (1 min)
 TV_FETCH_SECONDS     = 60           # TradingView poll (1 min)
@@ -845,25 +845,6 @@ def create_vwap_gauge(diff: float, tolerance: float) -> go.Figure:
 # ---------------- Streamlit UI ----------------
 st.set_page_config(page_title=f"NFS LIVE v{APP_VERSION}", layout="wide")
 
-# Inject CSS for card styling
-st.markdown("""
-<style>
-.metric-card {
-    background-color: #FFFFFF;
-    border: 1px solid #CCCCCC;
-    padding: 1rem;
-    border-radius: 10px;
-    box-shadow: 0 4px 8px 0 rgba(0,0,0,0.2);
-    transition: 0.3s;
-    text-align: center;
-}
-.metric-card:hover {
-  box-shadow: 0 8px 16px 0 rgba(0,0,0,0.2);
-}
-</style>
-""", unsafe_allow_html=True)
-
-
 st_autorefresh(interval=AUTOREFRESH_MS, key="nifty_autorefresh")
 mem = start_background(APP_VERSION)
 
@@ -967,58 +948,15 @@ with st.sidebar:
 st.title(f"NFS LIVE v{APP_VERSION} - Multi-Factor NIFTY Analysis")
 
 # Status row with cards
-st.markdown('<div class="metric-card-row">', unsafe_allow_html=True)
 cols = st.columns(8)
-with cols[0]:
-    with st.container():
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("Last OC", last_opt.strftime('%H:%M:%S') if last_opt else "—")
-        if last_opt: st.caption(f"{last_opt.astimezone(UAE).strftime('%H:%M:%S')} UAE")
-        st.markdown('</div>', unsafe_allow_html=True)
-with cols[1]:
-    with st.container():
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("Last TV", last_tv.strftime('%H:%M:%S') if last_tv else "—")
-        if last_tv: st.caption(f"{last_tv.astimezone(UAE).strftime('%H:%M:%S')} UAE")
-        st.markdown('</div>', unsafe_allow_html=True)
-with cols[2]:
-    with st.container():
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("Spot", f"{spot:,.2f}" if spot else "—")
-        st.caption("NIFTY 50")
-        st.markdown('</div>', unsafe_allow_html=True)
-with cols[3]:
-    with st.container():
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("VWAP", f"{vwap_latest:,.2f}" if vwap_latest else "—")
-        st.caption("Volume Weighted Avg")
-        st.markdown('</div>', unsafe_allow_html=True)
-with cols[4]:
-    with st.container():
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("RSI", f"{rsi:,.2f}" if rsi else "—")
-        st.caption("Momentum")
-        st.markdown('</div>', unsafe_allow_html=True)
-with cols[5]:
-    with st.container():
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("ADX", f"{adx:,.2f}" if adx else "—")
-        st.caption("Trend Strength")
-        st.markdown('</div>', unsafe_allow_html=True)
-with cols[6]:
-    with st.container():
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("ATM Strike", f"{atm_strike}" if atm_strike else "—")
-        st.caption("At-The-Money")
-        st.markdown('</div>', unsafe_allow_html=True)
-with cols[7]:
-    with st.container():
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("Imbalance %", f"{imbalance_pct:,.2f}%")
-        st.caption("OI Sentiment")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-st.markdown('</div>', unsafe_allow_html=True)
+cols[0].metric("Last OC", last_opt.strftime('%H:%M:%S') if last_opt else "—", help=f"{last_opt.astimezone(UAE).strftime('%H:%M:%S')} UAE" if last_opt else None)
+cols[1].metric("Last TV", last_tv.strftime('%H:%M:%S') if last_tv else "—", help=f"{last_tv.astimezone(UAE).strftime('%H:%M:%S')} UAE" if last_tv else None)
+cols[2].metric("Spot", f"{spot:,.2f}" if spot else "—")
+cols[3].metric("VWAP", f"{vwap_latest:,.2f}" if vwap_latest else "—")
+cols[4].metric("RSI", f"{rsi:,.2f}" if rsi else "—")
+cols[5].metric("ADX", f"{adx:,.2f}" if adx else "—")
+cols[6].metric("ATM Strike", f"{atm_strike}" if atm_strike else "—")
+cols[7].metric("Imbalance %", f"{imbalance_pct:,.2f}%")
 
 
 if df_live is None or df_live.empty:
