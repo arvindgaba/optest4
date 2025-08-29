@@ -25,7 +25,7 @@ from kiteconnect import KiteConnect
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= USER SETTINGS =================
-APP_VERSION = "2.2.9" # Reverted to live data table + added Suggestion column
+APP_VERSION = "2.3.0" # Fixed historical table KeyError
 SYMBOL               = "NIFTY"
 FETCH_EVERY_SECONDS  = 60          # option-chain poll (1 min)
 TV_FETCH_SECONDS     = 60           # TradingView poll (1 min)
@@ -558,6 +558,8 @@ def build_df_with_imbalance(raw: dict, store: dict):
         "imbalance_pct": imbalance_pct # Add simple imbalance for graphing
     }
     log.info("Score: final=%.2f%% sugg=%s; ATM=%s", final_score * 100, suggestion, atm_strike)
+    
+    df['Suggestion'] = suggestion
     return df, meta
 
 # ---------------- Signal History & Memory Store ----------------
@@ -661,6 +663,7 @@ def option_chain_loop(mem: StoreMem):
                         new_data = df.copy()
                         new_data['Timestamp'] = now_ist().strftime("%H:%M:%S")
                         new_data['Final Score'] = meta.get('final_score', 0.0) * 100
+                        new_data['Suggestion'] = meta.get('suggestion', 'NO SIGNAL')
                         mem.historical_data = pd.concat([new_data, mem.historical_data]).head(500) # Limit history size
                         
                         mem.df_opt, mem.meta_opt, mem.last_opt = df, dict(meta), now_ist()
