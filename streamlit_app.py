@@ -25,7 +25,7 @@ from kiteconnect import KiteConnect
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= USER SETTINGS =================
-APP_VERSION = "2.2.2" # Fixed Expiry Date Logic
+APP_VERSION = "2.2.3" # Corrected Zerodha Symbol Format
 SYMBOL               = "NIFTY"
 FETCH_EVERY_SECONDS  = 60          # option-chain poll (1 min)
 TV_FETCH_SECONDS     = 60           # TradingView poll (1 min)
@@ -682,9 +682,15 @@ def get_option_ltp(kite: KiteConnect, atm_strike: int, expiry: str, option_type:
     """Constructs the trading symbol and fetches the LTP from Zerodha."""
     if not kite: return None
     try:
-        # Format expiry to Zerodha's required format: YYMMMDD -> 25AUG28
         expiry_dt = dt.datetime.strptime(expiry, "%d-%b-%Y")
-        expiry_zerodha = expiry_dt.strftime("%y%b%d").upper()
+        year = expiry_dt.strftime("%y")
+        month = expiry_dt.month
+        day = expiry_dt.strftime("%d")
+
+        month_char_map = {10: 'O', 11: 'N', 12: 'D'}
+        month_char = month_char_map.get(month, str(month))
+        
+        expiry_zerodha = f"{year}{month_char}{day}"
         
         instrument = f"NIFTY{expiry_zerodha}{atm_strike}{option_type}"
         trading_symbol = f"NFO:{instrument}"
@@ -697,7 +703,7 @@ def get_option_ltp(kite: KiteConnect, atm_strike: int, expiry: str, option_type:
         log.warning(f"LTP not found for {trading_symbol}")
         return None
     except Exception as e:
-        log.error(f"Error fetching LTP: {e}")
+        log.error(f"Error fetching LTP for expiry {expiry}: {e}")
         return None
 
 def tradingview_loop(mem: StoreMem):
