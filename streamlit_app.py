@@ -25,7 +25,7 @@ from kiteconnect import KiteConnect
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= USER SETTINGS =================
-APP_VERSION = "2.2.6" # Added VWAP Gauge and restored UI elements
+APP_VERSION = "2.2.8" # Implemented Historical Data Table
 SYMBOL               = "NIFTY"
 FETCH_EVERY_SECONDS  = 60          # option-chain poll (1 min)
 TV_FETCH_SECONDS     = 60           # TradingView poll (1 min)
@@ -549,26 +549,15 @@ def build_df_with_imbalance(raw: dict, store: dict):
     if abs(final_score * 100) > dynamic_trigger:
         suggestion = "BUY PUT" if final_score < 0 else "BUY CALL"
 
-    updated_str = now_ist().strftime("%Y-%m-%d %H:%M:%S")
-    df.insert(0, "ATM", atm_strike)
-    df.insert(0, "Expiry", expiry)
-    df.insert(0, "Updated", updated_str)
-    df["Final Score"]   = round(final_score * 100, 2)
-    df["Suggestion"]    = suggestion
-
-    latest_store = load_atm_store()
-    atm_status_disp = latest_store.get("atm_status", "unknown")
-    base_value_disp = latest_store.get("base_value", None)
-
     meta = {
         "neighbors_each": neighbors_each, "underlying": underlying,
         "final_score": final_score, "suggestion": suggestion, "expiry": expiry,
-        "atm": atm_strike, "updated": updated_str, "atm_status": atm_status_disp,
-        "base_value": base_value_disp, "dynamic_trigger": dynamic_trigger,
+        "atm": atm_strike, "updated": now_ist().strftime("%Y-%m-%d %H:%M:%S"), "atm_status": "unknown",
+        "base_value": 0.0, "dynamic_trigger": dynamic_trigger,
         "oi_call_sum": oi_call_sum, "oi_put_sum": oi_put_sum,
         "imbalance_pct": imbalance_pct # Add simple imbalance for graphing
     }
-    log.info("Score: final=%.2f%% sugg=%s; ATM=%s (%s)", final_score * 100, suggestion, atm_strike, atm_status_disp)
+    log.info("Score: final=%.2f%% sugg=%s; ATM=%s", final_score * 100, suggestion, atm_strike)
     return df, meta
 
 # ---------------- Signal History & Memory Store ----------------
@@ -652,6 +641,7 @@ class StoreMem:
         self.intraday = IntradayImbalanceSeries()
         self.signal_history = SignalHistory()
         self.kite: KiteConnect | None = None
+        self.historical_data = pd.DataFrame()
 
 # ---------------- Worker Loops ----------------
 def option_chain_loop(mem: StoreMem):
@@ -665,7 +655,14 @@ def option_chain_loop(mem: StoreMem):
                     imbalance_pct = meta.get("imbalance_pct")
                     if imbalance_pct is not None:
                         mem.intraday.add_point(now_ist(), float(imbalance_pct))
+                    
                     with mem.lock:
+                        # Append new data to historical log
+                        new_data = df.copy()
+                        new_data['Timestamp'] = now_ist().strftime("%H:%M:%S")
+                        new_data['Final Score'] = meta.get('final_score', 0.0) * 100
+                        mem.historical_data = pd.concat([new_data, mem.historical_data]).head(500) # Limit history size
+                        
                         mem.df_opt, mem.meta_opt, mem.last_opt = df, dict(meta), now_ist()
                     try:
                         df.to_csv(CSV_PATH, index=False)
@@ -849,8 +846,8 @@ st_autorefresh(interval=AUTOREFRESH_MS, key="nifty_autorefresh")
 mem = start_background(APP_VERSION)
 
 with mem.lock:
-    df_live, meta, last_opt, vwap_latest, last_tv, vwap_alert, rsi, adx = \
-        mem.df_opt, mem.meta_opt, mem.last_opt, mem.vwap_latest, mem.last_tv, mem.vwap_alert, mem.rsi, mem.adx
+    df_live, meta, last_opt, vwap_latest, last_tv, vwap_alert, rsi, adx, historical_data = \
+        mem.df_opt, mem.meta_opt, mem.last_opt, mem.vwap_latest, mem.last_tv, mem.vwap_alert, mem.rsi, mem.adx, mem.historical_data
 
 # Extract data from meta dictionary for UI
 final_score = meta.get("final_score", 0.0)
@@ -1010,7 +1007,13 @@ else:
     st.caption("VWAP or Spot not available yet.")
 
 # Main Data Table
-st.dataframe(df_live, use_container_width=True, hide_index=True)
+st.subheader("Live Option Chain Data (Historical)")
+if not historical_data.empty:
+    display_cols = ["Timestamp", "Strike", "Call Chg OI", "Put Chg OI", "Call Volume", "Put Volume", "Call IV", "Put IV", "Final Score"]
+    st.dataframe(historical_data[display_cols], use_container_width=True, hide_index=True)
+else:
+    st.info("Historical data will accumulate here during the trading session.")
+
 
 # Intraday Imbalance Trend Chart
 df_trend = mem.intraday.to_dataframe()
