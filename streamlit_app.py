@@ -25,7 +25,7 @@ from kiteconnect import KiteConnect
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= USER SETTINGS =================
-APP_VERSION = "2.2.8" # Implemented Historical Data Table
+APP_VERSION = "2.2.9" # Reverted to live data table + added Suggestion column
 SYMBOL               = "NIFTY"
 FETCH_EVERY_SECONDS  = 60          # option-chain poll (1 min)
 TV_FETCH_SECONDS     = 60           # TradingView poll (1 min)
@@ -1009,7 +1009,7 @@ else:
 # Main Data Table
 st.subheader("Live Option Chain Data (Historical)")
 if not historical_data.empty:
-    display_cols = ["Timestamp", "Strike", "Call Chg OI", "Put Chg OI", "Call Volume", "Put Volume", "Call IV", "Put IV", "Final Score"]
+    display_cols = ["Timestamp", "Strike", "Call Chg OI", "Put Chg OI", "Call Volume", "Put Volume", "Call IV", "Put IV", "Final Score", "Suggestion"]
     st.dataframe(historical_data[display_cols], use_container_width=True, hide_index=True)
 else:
     st.info("Historical data will accumulate here during the trading session.")
