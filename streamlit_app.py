@@ -25,7 +25,7 @@ from kiteconnect import KiteConnect
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= USER SETTINGS =================
-APP_VERSION = "2.2.1" # Added Manual LTP Test Button
+APP_VERSION = "2.2.2" # Fixed Expiry Date Logic
 SYMBOL               = "NIFTY"
 FETCH_EVERY_SECONDS  = 60          # option-chain poll (1 min)
 TV_FETCH_SECONDS     = 60           # TradingView poll (1 min)
@@ -229,19 +229,43 @@ def new_session():
     return s
 
 def pick_current_week_expiry(raw: dict) -> str | None:
+    """
+    Selects the nearest weekly (Thursday) expiry. Falls back to the soonest
+    available future date if no Thursday is found (for monthlys/holidays).
+    """
     today = now_ist().date()
     parsed = []
-    for s in raw.get("records", {}).get("expiryDates", []):
+    expiry_dates = raw.get("records", {}).get("expiryDates", [])
+    if not expiry_dates:
+        log.error("No expiryDates in JSON from NSE.")
+        return None
+
+    for s in expiry_dates:
         try:
             parsed.append((s, dt.datetime.strptime(s, "%d-%b-%Y").date()))
         except Exception:
             pass
+    
     if not parsed:
-        log.error("No expiryDates in JSON.")
+        log.error("Could not parse any expiry dates.")
         return None
-    future = [p for p in parsed if p[1] >= today]
-    chosen = min(future, key=lambda x: x[1]) if future else min(parsed, key=lambda x: x[1])
-    return chosen[0]
+
+    future_expiries = [p for p in parsed if p[1] >= today]
+    if not future_expiries:
+        log.warning("No future expiry dates found. Using the latest available past expiry.")
+        return parsed[-1][0] if parsed else None
+
+    thursday_expiries = [p for p in future_expiries if p[1].weekday() == 3]
+
+    if thursday_expiries:
+        chosen = min(thursday_expiries, key=lambda x: x[1])
+        log.info(f"Selected Thursday expiry: {chosen[0]}")
+        return chosen[0]
+    else:
+        chosen = min(future_expiries, key=lambda x: x[1])
+        log.warning(f"No Thursday expiry found. Using soonest available future date: {chosen[0]}")
+        return chosen[0]
+
 
 def round_to_50(x: float) -> int:
     return int(round(x / 50.0) * 50)
